@@ -25,7 +25,7 @@ The scene is loaded from the JSONC file that is specified when the `World` objec
 | `clock` | **[Clock settings](#clock-settings)** | Simulation clock settings. |
 | `home-geo-point` | **[Home GeoPoint settings](#home-geopoint-settings)** | GeoPoint coordinates (latitude, longitude, altitude) corresponding to the scene origin. |
 | `segmentation` | **[Segmentation ID settings](#segmentation-settings)** | Segmentation ID settings for automatically assigning segmentation IDs to objects in the scene. |
-| `scene-type` | string | (Optional) Use 'CustomGIS' if you are running a geospecific GIS scenario. Defaults to 'UnrealNative' for non-GIS scenes. |
+| `scene-type` | string | (Optional) Use 'CustomGIS' or 'CesiumGIS' if you are running a geospecific GIS scenario (see **[GIS Scenes](gis_scenes.md)**). Defaults to 'UnrealNative' for non-GIS scenes. |
 | `tiles-dir` | string | (Optional) Local path containing the GIS tiles used when `scene-type` is set as `CustomGIS`. |
 | `tiles-altitude-offset` | float | (Optional) Our tiles have altitude values of WGS84 ellipsoidal height. Sometimes other altitude models are preferred, so you can use this setting to offset the tiles by the provided value in meters. Most GIS software use a geoid relative altitude, so you can query the geoid height at some coord and enter it here: https://geographiclib.sourceforge.io/cgi-bin/GeoidEval |
 | `tiles-lod-max` | integer | (Optional) Maximum level of detail for tiles. Default is 19. Maximum allowed is 23. |

@@ -22,9 +22,16 @@
 #ifdef ENABLE_CESIUM
 #include "Cesium3DTileset.h"
 #include "CesiumGeoreference.h"
+#include "Kismet/GameplayStatics.h"
 #endif
 
 namespace projectairsim = microsoft::projectairsim;
+
+#ifdef ENABLE_CESIUM
+// Cesium places Unreal +X East and +Y South at the georeference origin;
+// rotate by 90 deg so that +X points North, matching the NED frame.
+static constexpr float CesiumGeoreferenceYawDeg = 90.0f;
+#endif
 
 DEFINE_LOG_CATEGORY(SimPlugin);
 
@@ -234,28 +241,101 @@ FString AUnrealSimLoader::ResolveTilesDirectory(
 void AUnrealSimLoader::ConfigureCesiumTileset(
     ACesium3DTileset* CesiumTile, projectairsim::GeoPoint& HomeGeoPoint,
     FString TilesetDir) {
-  CesiumTile->Url = FString("file:///" + TilesetDir);
+  if (CesiumTile != nullptr) {
+    // TilesetDir is a tiles directory or a root tileset json file (with a
+    // trailing '/'), but Cesium needs an absolute file URL of the json file.
+    FString TilesetPath = FPaths::ConvertRelativePathToFull(TilesetDir);
+    TilesetPath.RemoveFromEnd(TEXT("/"));
+    if (!TilesetPath.EndsWith(TEXT(".json"))) {
+      TilesetPath += TEXT("/tileset.json");
+    }
 
-  // Disable culling and lower LODs since sensors might be independent from
-  // frustum.
-  CesiumTile->EnableFrustumCulling = false;
-  CesiumTile->EnforceCulledScreenSpaceError = true;
-  CesiumTile->CulledScreenSpaceError = CesiumTile->MaximumScreenSpaceError;
+    // A spawned tileset defaults to ETilesetSource::FromCesiumIon, which
+    // ignores the Url.
+    CesiumTile->SetTilesetSource(ETilesetSource::FromUrl);
+    CesiumTile->SetUrl(FString("file:///") + TilesetPath);
 
-  auto CesiumRot = FRotator(
-      0, 90, 0);  // to match cesium's ENU RHS coords with our NEU LHS coords.
-  auto CesiumLoc =
-      FVector(0.f, 0.f, 8844.f);  // TODO: can we get rid of this magic num and
-                                  // smartly pick a height for the tileset?
-  UGameplayStatics::FinishSpawningActor(CesiumTile,
-                                        FTransform(CesiumRot, CesiumLoc));
+    // Disable culling and lower LODs since sensors might be independent from
+    // frustum.
+    CesiumTile->EnableFrustumCulling = false;
+    CesiumTile->EnforceCulledScreenSpaceError = true;
+    CesiumTile->CulledScreenSpaceError = CesiumTile->MaximumScreenSpaceError;
 
-  CesiumTile->Georeference->OriginLatitude = HomeGeoPoint.latitude;
-  CesiumTile->Georeference->OriginLongitude = HomeGeoPoint.longitude;
-  CesiumTile->Georeference->OriginHeight = HomeGeoPoint.altitude;
-  CesiumTile->Georeference->KeepWorldOriginNearCamera =
-      false;  // TODO: to maintain precision we should look into making this
-              // work.
+    // TODO: can we get rid of this magic num and smartly pick a height for
+    // the tileset?
+    const FVector CesiumLoc(0.0, 0.0, 8844.0);
+    UGameplayStatics::FinishSpawningActor(
+        CesiumTile, FTransform(FRotator::ZeroRotator, CesiumLoc));
+
+    ACesiumGeoreference* pGeoreference = CesiumTile->ResolveGeoreference();
+    if (pGeoreference != nullptr) {
+      pGeoreference->SetOriginLongitudeLatitudeHeight(
+          FVector(HomeGeoPoint.longitude, HomeGeoPoint.latitude,
+                  HomeGeoPoint.altitude));
+
+      // Runtime-spawned tileset must be attached to follow the georeference.
+      CesiumTile->AttachToActor(pGeoreference,
+                                FAttachmentTransformRules::KeepRelativeTransform);
+
+      // Rotate globe to match cesium's ESU coords with our NEU coords.
+      pGeoreference->SetActorRotation(
+          FRotator(0.0f, CesiumGeoreferenceYawDeg, 0.0f));
+    } else {
+      UnrealLogger::Log(projectairsim::LogLevel::kError,
+                        TEXT("[AUnrealSimLoader] Could not resolve "
+                             "CesiumGeoreference for the spawned tileset."));
+    }
+  } else {
+    UnrealLogger::Log(projectairsim::LogLevel::kError,
+                      TEXT("[AUnrealSimLoader] Cesium tileset spawn failed, "
+                           "skipping tileset configuration."));
+  }
+}
+
+// Align a CesiumGeoreference placed in an UnrealNative level with the sim
+// frame (origin at home geo point, +X = North).
+void AUnrealSimLoader::AlignCesiumGeoreference(
+    const projectairsim::GeoPoint& HomeGeoPoint) {
+  ACesiumGeoreference* pGeoreference = Cast<ACesiumGeoreference>(
+      UGameplayStatics::GetActorOfClass(UnrealWorld,
+                                        ACesiumGeoreference::StaticClass()));
+
+  if (pGeoreference != nullptr) {
+    if (pGeoreference->GetOriginPlacement() !=
+        EOriginPlacement::CartographicOrigin) {
+      UnrealLogger::Log(projectairsim::LogLevel::kWarning,
+                        TEXT("[AUnrealSimLoader] CesiumGeoreference origin "
+                             "placement is not CartographicOrigin, "
+                             "overriding it."));
+      pGeoreference->SetOriginPlacement(EOriginPlacement::CartographicOrigin);
+    }
+
+    pGeoreference->SetOriginLongitudeLatitudeHeight(
+        FVector(HomeGeoPoint.longitude, HomeGeoPoint.latitude,
+                HomeGeoPoint.altitude));
+
+    pGeoreference->SetActorRotation(
+        FRotator(0.0f, CesiumGeoreferenceYawDeg, 0.0f));
+
+    // Non-movable tileset collision may not follow the georeference rotation.
+    UnrealLogger::Log(
+        projectairsim::LogLevel::kWarning,
+        TEXT("[AUnrealSimLoader] CesiumGeoreference was rotated. Set the "
+             "Mobility of Cesium tilesets in the level to Movable so that "
+             "their collision follows the rotation."));
+
+    UnrealLogger::Log(
+        projectairsim::LogLevel::kTrace,
+        TEXT("[AUnrealSimLoader] Aligned CesiumGeoreference '%s': origin "
+             "(lon %f, lat %f, h %f), yaw %f deg."),
+        *pGeoreference->GetName(), HomeGeoPoint.longitude,
+        HomeGeoPoint.latitude, HomeGeoPoint.altitude,
+        CesiumGeoreferenceYawDeg);
+  } else {
+    UnrealLogger::Log(projectairsim::LogLevel::kTrace,
+                      TEXT("[AUnrealSimLoader] No CesiumGeoreference in the "
+                           "level, skipping Cesium alignment."));
+  }
 }
 #endif
 
@@ -419,6 +499,13 @@ void AUnrealSimLoader::LoadUnrealScene() {
                   static_cast<int>(Scene.GetSceneType()));
               break;
           }
+
+#ifdef ENABLE_CESIUM
+          // Align Cesium actors placed in an UnrealNative level.
+          if (Scene.GetSceneType() == projectairsim::SceneType::kUnrealNative) {
+            AlignCesiumGeoreference(Scene.GetHomeGeoPoint().geo_point);
+          }
+#endif
         }
 
         {

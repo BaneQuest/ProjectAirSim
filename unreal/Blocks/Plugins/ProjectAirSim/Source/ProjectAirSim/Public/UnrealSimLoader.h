@@ -27,6 +27,7 @@ class Actor;
 
 #ifdef ENABLE_CESIUM
 class ACesium3DTileset;
+class ACesiumGeoreference;
 #endif
 
 class PROJECTAIRSIM_API AUnrealSimLoader {
@@ -53,8 +54,13 @@ class PROJECTAIRSIM_API AUnrealSimLoader {
 
 #ifdef ENABLE_CESIUM
   void ConfigureCesiumTileset(ACesium3DTileset* CesiumTile,
-                              projectairsim::GeoPoint& HomeGeoPoint,
+                              microsoft::projectairsim::GeoPoint& HomeGeoPoint,
                               FString TilesetDir);
+
+  // Align a CesiumGeoreference placed in an UnrealNative level with the sim
+  // coordinate frame (origin at home geo point, +X = North).
+  void AlignCesiumGeoreference(
+      const microsoft::projectairsim::GeoPoint& HomeGeoPoint);
 #endif
 
   void SetUnrealEngineSettings();
